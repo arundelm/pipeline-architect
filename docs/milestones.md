@@ -1,206 +1,193 @@
 # Pipeline Architect Milestones
 
-This roadmap turns the product spec into commit-sized increments so the repo can grow in a clean, reviewable way.
+This roadmap starts with the smallest proof of value: one local script that can turn a prompt into a structured spec, generate one file, and validate it.
 
 ## Working Decisions
 
 - Default runtime: Ollama
-- Primary model for all code and structured tasks: `qwen2.5-coder:14b`
+- Primary model for code and structured tasks: `qwen2.5-coder:14b`
 - Prose model for README/help/summaries: `llama3.1`
-- Backend stack: Python 3.12, FastAPI, Pydantic v2, LangGraph, Jinja2
-- Frontend stack: Next.js, TypeScript, Tailwind CSS
-- MVP targets:
-  - `s3_csv -> postgres`
-  - `s3_csv -> clickhouse`
-  - `stripe_api -> snowflake + dbt`
+- First proof target: natural language -> structured spec -> generated artifact -> validation
+- Delay FastAPI, LangGraph, frontend, retrieval, and repair orchestration until the core loop works locally
 
 ## Milestone Sequence
 
 ### Milestone 0: Repo Bootstrap
 
-Goal: create the base repo layout and lock in project decisions.
+Goal: lock in the local-first defaults and make the repo ready for the first script.
 
 Scope:
 - add the initial repo docs
-- create top-level folders for `apps`, `core`, `tests`, and `docs`
-- add base config files such as `.gitignore` and environment examples
-- document the model-routing policy
+- add `.env.example`
+- add `.gitignore`
+- document the model split and local Ollama assumptions
 
 Recommended commit(s):
-- `docs: add project overview and milestone roadmap`
-- `chore: scaffold repository structure and base config`
+- `docs: add project overview and MVP milestones`
+- `chore: add env example and gitignore`
 
 Done when:
-- the repo has a stable layout
-- a new contributor can see the project direction immediately
+- the repo has a clean starting point
+- local config expectations are obvious
 
-### Milestone 1: Core Domain Models
+### Milestone 1: Prompt -> Valid JSON Spec
 
-Goal: define the typed backbone of the system before any orchestration work.
+Goal: build a single Python function that sends a request to Ollama and returns parsed JSON shaped like a `PipelineSpec`.
+
+Input:
+- `"Ingest daily CSVs from S3, clean null emails, dedupe by user_id, load to Postgres"`
+
+Output JSON fields:
+- `project_name`
+- `source`
+- `destination`
+- `transforms`
+- `schedule`
+
+Constraints:
+- one runnable script
+- no frontend
+- no FastAPI
+- no LangGraph
+
+Recommended commit(s):
+- `feat(spec): add Ollama-backed prompt-to-json script`
+- `test(spec): verify parsed output shape`
+
+Done when:
+- one script runs locally
+- it prints valid parsed JSON
+- the JSON contains the required fields
+
+### Milestone 2: JSON Spec -> One Generated File
+
+Goal: take the parsed JSON and render one Jinja template into one real file on disk.
+
+Target output:
+- `dags/<project_name>.py`
 
 Scope:
-- implement `PipelineSpec`, `FileArtifact`, and `ValidationReport`
-- add enums or registries for sources, transforms, destinations, and orchestrators
-- add fixture examples for the three MVP pipeline shapes
-- add unit tests for model validation
+- convert the parsed JSON into template context
+- render one Airflow DAG template
+- derive the output filename from the spec
+- write the generated file to disk
 
 Recommended commit(s):
-- `feat(core): add pipeline domain models`
-- `test(core): cover pipeline spec validation rules`
+- `feat(generate): render one Airflow DAG from the parsed spec`
+- `test(generate): verify output path and template rendering`
 
 Done when:
-- the core data model is stable enough to drive the rest of the app
-- invalid combinations fail fast and clearly
+- the same prompt can generate a real Airflow DAG file
+- template variables are filled correctly
+- the file name comes from the spec
 
-### Milestone 2: Provider and LLM Routing Layer
+### Milestone 3: Validate Generated Output
 
-Goal: make model usage explicit and swappable without committing to hosted providers.
+Goal: add one validation pass after file generation.
+
+MVP validation rules:
+- Python AST parse for generated `.py`
+- YAML parse for generated `.yml` or `.yaml`
+- fail if unresolved template markers remain, such as `{{ ... }}`
+
+Recommended commit(s):
+- `feat(validate): add generated file validation`
+- `test(validate): catch syntax and template marker failures`
+
+Done when:
+- bad generations are caught automatically
+- the script prints `valid` or a list of validation errors
+
+### Milestone 4: Refactor the Script into Real Project Structure
+
+Goal: move the proven loop into reusable modules without changing the behavior.
 
 Scope:
-- add a provider interface in `core/providers`
-- implement Ollama as the default provider
-- add a small routing layer that sends:
-  - code/structured tasks to `qwen2.5-coder:14b`
-  - README/help/summary tasks to `llama3.1`
-- add config-driven model names and sensible defaults
-- add tests for task-to-model routing
+- introduce typed Pydantic models
+- split the script into small services
+- add a clearer package layout under `core/`
+- keep the same prompt-to-artifact flow working
 
 Recommended commit(s):
-- `feat(llm): add provider abstraction and Ollama client`
-- `feat(llm): route prose tasks to llama3.1 and code tasks to qwen2.5-coder`
+- `refactor(core): extract models and services from the MVP script`
+- `test(core): preserve prompt-to-artifact behavior through refactor`
 
-Done when:
-- model selection is centralized
-- no workflow node hardcodes model names directly
+### Milestone 5: Add Repair and Better Spec Quality
 
-### Milestone 3: Planning Workflow MVP
-
-Goal: turn a free-form request into a validated `PipelineSpec`.
+Goal: improve the loop after the basic path is already reliable.
 
 Scope:
-- implement request parsing and normalization
-- implement planning nodes for:
-  - `parse_request`
-  - `enrich_context`
-  - `plan_pipeline`
-- start with local example lookup using static examples before vector retrieval
-- expose inspectable intermediate state
+- add one repair attempt after validation fails
+- strengthen prompt instructions and structured parsing
+- add fixture-based tests for multiple prompt variants
 
 Recommended commit(s):
-- `feat(graph): add request parsing and planning nodes`
-- `feat(api): add generate-spec endpoint`
+- `feat(repair): add one-pass repair attempt for invalid outputs`
+- `test(spec): add fixture coverage for multiple pipeline prompts`
 
-Done when:
-- a user prompt can produce a typed spec for the three MVP targets
-- workflow state can be inspected during development
+### Milestone 6: Add a Thin API Layer
 
-### Milestone 4: Template Rendering and Artifact Output
-
-Goal: generate useful files from a valid spec.
+Goal: expose the existing local workflow through FastAPI without rewriting the core logic.
 
 Scope:
-- create template registries and template selection logic
-- add Jinja templates for:
-  - Airflow or Dagster skeletons
-  - dbt files
-  - common project files
-- implement artifact storage on the local filesystem
-- return generated files through the API
+- add a generate endpoint
+- add a validate endpoint
+- return generated files and validation output as structured responses
 
 Recommended commit(s):
-- `feat(templates): add template registry and first MVP templates`
-- `feat(artifacts): render files and persist outputs locally`
+- `feat(api): add generate and validate endpoints`
 
-Done when:
-- the system can produce a coherent project bundle for at least one end-to-end MVP path
+### Milestone 7: Add Workflow Orchestration
 
-### Milestone 5: Validation and Single Repair Loop
-
-Goal: keep output deterministic and recover once when generation is invalid.
+Goal: introduce LangGraph only after the single-path workflow is already working.
 
 Scope:
-- implement structural validation for generated files
-- add syntax checks and lightweight linting where practical
-- implement one repair pass using the primary code model
-- record validator output and repair attempts in workflow state
+- model workflow state explicitly
+- convert the local flow into nodes
+- preserve inspectability for parse, generate, validate, and repair steps
 
 Recommended commit(s):
-- `feat(validation): validate generated artifacts`
-- `feat(repair): add one-pass repair loop for invalid outputs`
+- `feat(graph): add workflow state and core nodes`
 
-Done when:
-- invalid generations are surfaced clearly
-- one automatic repair attempt can improve or fail cleanly
-
-### Milestone 6: Frontend MVP
-
-Goal: let a user run the workflow locally without touching the backend directly.
-
-Scope:
-- build a simple Next.js interface for:
-  - entering a request
-  - viewing the generated spec
-  - browsing generated files
-  - reviewing validation output
-  - downloading a ZIP artifact
-- add lightweight help text generated or maintained for the prose model lane
-
-Recommended commit(s):
-- `feat(web): add generation form and result views`
-- `feat(web): add artifact browser and validation panels`
-
-Done when:
-- one local browser session can complete the main generation flow
-
-### Milestone 7: Retrieval and Example Library
+### Milestone 8: Add Retrieval and Example Support
 
 Goal: improve planning quality with local examples, while staying local-first.
 
 Scope:
 - add curated example specs and outputs
-- add embedding and retrieval support with Chroma
-- wire retrieval into the planning workflow behind a clean service boundary
-- keep static fallback behavior if embeddings are unavailable
+- add Chroma-backed retrieval behind a service boundary
+- keep a static fallback if retrieval is unavailable
 
 Recommended commit(s):
-- `feat(examples): add curated local example library`
-- `feat(retrieval): add Chroma-backed example search`
+- `feat(retrieval): add local example store and Chroma search`
 
-Done when:
-- planning can use similar local examples without making remote calls
+### Milestone 9: Add Frontend and OSS Polish
 
-### Milestone 8: Polish, Demo Path, and OSS Readiness
-
-Goal: make the repo strong enough for open-source use and portfolio review.
+Goal: make the repo usable as a local app and presentable as an open-source project.
 
 Scope:
-- tighten README and local setup docs
-- add sample screenshots or demo assets
-- expand test coverage for the critical workflow
-- add a stable demo script or seed prompt set
-- clean up env handling and developer ergonomics
+- add the Next.js UI
+- surface spec, artifacts, and validation results
+- improve README, setup docs, and demo flow
 
 Recommended commit(s):
-- `docs: improve local setup, examples, and demo flow`
-- `test: expand end-to-end coverage for main workflow`
-
-Done when:
-- a new developer can clone, run Ollama, start the app, and produce a demo output quickly
+- `feat(web): add local generation UI`
+- `docs: polish setup and demo instructions`
 
 ## Suggested Commit Rhythm
 
-If you want especially frequent Git checkpoints, use this cadence:
+Use small checkpoints that match visible progress:
 
-1. commit after folder/config scaffolding
-2. commit after each major domain or service layer
-3. commit after each user-visible workflow slice
-4. commit after each test batch that locks in behavior
-
-That gives you small, reviewable commits without fragmenting the work into noise.
+1. docs and config
+2. prompt-to-json
+3. json-to-file
+4. validation
+5. refactors that preserve the working loop
+6. API, orchestration, retrieval, and UI only after the loop is proven
 
 ## Recommended Build Order
 
-If you want the fastest path to a working demo, build in this order:
+Build in this order:
 
 1. Milestone 0
 2. Milestone 1
@@ -211,5 +198,6 @@ If you want the fastest path to a working demo, build in this order:
 7. Milestone 6
 8. Milestone 7
 9. Milestone 8
+10. Milestone 9
 
-Do not start retrieval, multi-provider support, or polish work before the spec-to-artifacts path works locally.
+Do not start FastAPI, LangGraph, or the frontend before Milestone 3 is working end to end.
